@@ -1,129 +1,182 @@
 #!/usr/bin/env python3
-"""Draw the 20 November 2026 world-news poster (1024x1024, deterministic).
+"""Render the 20 November 2026 world-news poster as a 1024x1024 PNG.
 
-Run: python3 draw_poster.py  -> writes entry.png next to this script.
-The PNG is fully deterministic: fixed palette, fixed fonts, fixed layout,
-no timestamps embedded by Pillow, so repeated runs are byte-identical.
+The script is deterministic by construction: a fixed palette, fixed
+DejaVu fonts, fixed geometry and no timestamps anywhere, so running it
+twice yields byte-identical output.
+
+Usage: python3 draw_poster.py   (writes entry.png beside the script)
 """
-import textwrap
+
+from dataclasses import dataclass
+from os.path import getsize
+
 from PIL import Image, ImageDraw, ImageFont
 
 W, H = 1024, 1024
-FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-FONT_REG = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+DEJAVU_DIR = "/usr/share/fonts/truetype/dejavu/"
 
-NAVY = (18, 38, 63)
-GOLD = (212, 175, 55)
-PAPER = (245, 241, 232)
-CARD = (255, 255, 255)
-INK = (24, 30, 38)
-GREY = (110, 116, 124)
-WHITE = (255, 255, 255)
+PALETTE = {
+    "navy": (18, 38, 63),
+    "gold": (212, 175, 55),
+    "paper": (245, 241, 232),
+    "card": (255, 255, 255),
+    "ink": (24, 30, 38),
+    "body": (58, 64, 74),
+    "grey": (110, 116, 124),
+    "white": (255, 255, 255),
+    "line": (214, 210, 198),
+    "subhead": (200, 210, 222),
+}
+
+
+@dataclass
+class Story:
+    tag: str
+    tint: tuple
+    title: str
+    text: str
+    credit: str
+
 
 STORIES = [
-    ("1", "LAW  ·  THE HAGUE", (31, 93, 140),
-     "ICJ finds Myanmar guilty of genocide against Rohingya",
-     "The court rules 9-6 that Myanmar committed genocide "
-     "against the Rohingya, a first for any state at the ICJ.",
-     "Source: CNN"),
-    ("2", "WEATHER  ·  INDIA", (27, 110, 90),
-     "Cyclone Akvan slams India's east coast",
-     "Cyclone Akvan makes landfall near Gopalpur, Odisha, "
-     "with 90\u2013110 km/h winds; over 300,000 people are evacuated.",
-     "Source: IANS"),
-    ("3", "EUROPE  ·  KYIV", (146, 46, 46),
-     "Russian strike damages EU embassies in Kyiv",
-     "Projectiles damage the Austrian and Dutch embassies in "
-     "Kyiv; the EU and European states summon Russia's envoys.",
-     "Source: Reuters"),
-    ("4", "DIPLOMACY  ·  SHENZHEN", (31, 93, 140),
-     "Trump, Xi and Putin hold first three-way summit",
-     "The three leaders meet in Shenzhen and issue a joint "
-     "peace declaration; Putin rules out a ceasefire with Ukraine.",
-     "Source: The Times"),
-    ("5", "HORN OF AFRICA  ·  MOGADISHU", (146, 46, 46),
-     "Somalia expels UAE ambassador in 72 hours",
-     "Somalia orders the UAE ambassador out in 72 hours "
-     "and recalls its own envoy over violations of its sovereignty.",
-     "Source: Reuters"),
-    ("6", "EUROPE  ·  UKRAINE", (27, 110, 90),
-     "European leaders ready to talk with Russia",
-     "European leaders say they are ready to negotiate with "
-     "Russia to bring the war in Ukraine to an end.",
-     "Source: BBC"),
+    Story(
+        tag="LAW  ·  THE HAGUE",
+        tint=(31, 93, 140),
+        title="ICJ finds Myanmar guilty of genocide against Rohingya",
+        text="The court rules 9-6 that Myanmar committed genocide "
+        "against the Rohingya, a first for any state at the ICJ.",
+        credit="Source: CNN",
+    ),
+    Story(
+        tag="WEATHER  ·  INDIA",
+        tint=(27, 110, 90),
+        title="Cyclone Akvan slams India's east coast",
+        text="Cyclone Akvan makes landfall near Gopalpur, Odisha, "
+        "with 90–110 km/h winds; over 300,000 people are evacuated.",
+        credit="Source: IANS",
+    ),
+    Story(
+        tag="EUROPE  ·  KYIV",
+        tint=(146, 46, 46),
+        title="Russian strike damages EU embassies in Kyiv",
+        text="Projectiles damage the Austrian and Dutch embassies in "
+        "Kyiv; the EU and European states summon Russia's envoys.",
+        credit="Source: Reuters",
+    ),
+    Story(
+        tag="DIPLOMACY  ·  SHENZHEN",
+        tint=(31, 93, 140),
+        title="Trump, Xi and Putin hold first three-way summit",
+        text="The three leaders meet in Shenzhen and issue a joint "
+        "peace declaration; Putin rules out a ceasefire with Ukraine.",
+        credit="Source: The Times",
+    ),
+    Story(
+        tag="HORN OF AFRICA  ·  MOGADISHU",
+        tint=(146, 46, 46),
+        title="Somalia expels UAE ambassador in 72 hours",
+        text="Somalia orders the UAE ambassador out in 72 hours "
+        "and recalls its own envoy over violations of its sovereignty.",
+        credit="Source: Reuters",
+    ),
+    Story(
+        tag="EUROPE  ·  UKRAINE",
+        tint=(27, 110, 90),
+        title="European leaders ready to talk with Russia",
+        text="European leaders say they are ready to negotiate with "
+        "Russia to bring the war in Ukraine to an end.",
+        credit="Source: BBC",
+    ),
 ]
 
 
-def font(path, size):
-    return ImageFont.truetype(path, size)
+def load(size, bold=False):
+    name = "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf"
+    return ImageFont.truetype(DEJAVU_DIR + name, size)
 
 
-def wrap(draw, text, fnt, max_w):
-    words, lines, cur = text.split(), [], ""
-    for word in words:
-        trial = (cur + " " + word).strip()
-        if draw.textlength(trial, font=fnt) <= max_w:
-            cur = trial
-        else:
-            if cur:
-                lines.append(cur)
-            cur = word
-    if cur:
-        lines.append(cur)
-    return lines
+def fit_lines(draw, text, font, width):
+    """Greedy word wrap measured in pixels; returns a list of lines."""
+    out = []
+    line = ""
+    for word in text.split():
+        joined = (line + " " + word).strip()
+        if draw.textlength(joined, font=font) <= width:
+            line = joined
+            continue
+        if line:
+            out.append(line)
+        line = word
+    if line:
+        out.append(line)
+    return out
 
 
-def main():
-    img = Image.new("RGB", (W, H), PAPER)
-    d = ImageDraw.Draw(img)
+def paint_header(draw):
+    draw.rectangle((0, 0, W, 172), fill=PALETTE["navy"])
+    draw.rectangle((0, 172, W, 178), fill=PALETTE["gold"])
+    draw.text((36, 26), "THE WORLD IN ONE DAY",
+              font=load(58, bold=True), fill=PALETTE["white"])
+    draw.text((36, 96), "Friday, 20 November 2026",
+              font=load(34, bold=True), fill=PALETTE["gold"])
+    draw.text((36, 140), "Six stories that defined the day",
+              font=load(22), fill=PALETTE["subhead"])
 
-    # ---- header band ----
-    d.rectangle([0, 0, W, 172], fill=NAVY)
-    d.rectangle([0, 172, W, 178], fill=GOLD)
-    d.text((36, 26), "THE WORLD IN ONE DAY", font=font(FONT_BOLD, 58), fill=WHITE)
-    d.text((36, 96), "Friday, 20 November 2026",
-           font=font(FONT_BOLD, 34), fill=GOLD)
-    d.text((36, 140), "Six stories that defined the day",
-           font=font(FONT_REG, 22), fill=(200, 210, 222))
 
-    # ---- story grid: 2 cols x 3 rows ----
-    margin, gap = 28, 18
-    top, bottom = 196, 962
-    cw = (W - 2 * margin - gap) // 2
-    ch = (bottom - top - 2 * gap) // 3
-    for i, (num, kicker, accent, headline, body, source) in enumerate(STORIES):
-        x = margin + (i % 2) * (cw + gap)
-        y = top + (i // 2) * (ch + gap)
-        d.rounded_rectangle([x, y, x + cw, y + ch], radius=14, fill=CARD,
-                            outline=(214, 210, 198), width=1)
-        d.rectangle([x, y + 14, x + 8, y + ch - 14], fill=accent)
-        # number badge
-        d.ellipse([x + 24, y + 20, x + 64, y + 60], fill=accent)
-        d.text((x + 44, y + 39), num, font=font(FONT_BOLD, 24),
-               fill=WHITE, anchor="mm")
-        d.text((x + 78, y + 38), kicker, font=font(FONT_BOLD, 17),
-               fill=accent, anchor="lm")
-        # headline, up to 2 lines
-        hl = wrap(d, headline, font(FONT_BOLD, 25), cw - 48)
-        hy = y + 74
-        for line in hl[:2]:
-            d.text((x + 24, hy), line, font=font(FONT_BOLD, 25), fill=INK)
-            hy += 31
-        # body, up to 3 lines
-        bl = wrap(d, body, font(FONT_REG, 19), cw - 48)
-        by = hy + 6
-        for line in bl[:3]:
-            d.text((x + 24, by), line, font=font(FONT_REG, 19), fill=(58, 64, 74))
-            by += 25
-        d.text((x + 24, y + ch - 30), source, font=font(FONT_REG, 15), fill=GREY)
+def paint_story(draw, story, index, card_w, card_h):
+    margin, gutter, top = 28, 18, 196
+    x = margin + (index % 2) * (card_w + gutter)
+    y = top + (index // 2) * (card_h + gutter)
+    draw.rounded_rectangle((x, y, x + card_w, y + card_h), radius=14,
+                           fill=PALETTE["card"], outline=PALETTE["line"],
+                           width=1)
+    draw.rectangle((x, y + 14, x + 8, y + card_h - 14), fill=story.tint)
+    # Numbered badge and section tag.
+    draw.ellipse((x + 24, y + 20, x + 64, y + 60), fill=story.tint)
+    draw.text((x + 44, y + 39), str(index + 1), font=load(24, bold=True),
+              fill=PALETTE["white"], anchor="mm")
+    draw.text((x + 78, y + 38), story.tag, font=load(17, bold=True),
+              fill=story.tint, anchor="lm")
+    # Headline, at most two lines; body, at most three.
+    head = fit_lines(draw, story.title, load(25, bold=True), card_w - 48)
+    hy = y + 74
+    for line in head[:2]:
+        draw.text((x + 24, hy), line, font=load(25, bold=True),
+                  fill=PALETTE["ink"])
+        hy += 31
+    body = fit_lines(draw, story.text, load(19), card_w - 48)
+    by = hy + 6
+    for line in body[:3]:
+        draw.text((x + 24, by), line, font=load(19),
+                  fill=PALETTE["body"])
+        by += 25
+    draw.text((x + 24, y + card_h - 30), story.credit, font=load(15),
+              fill=PALETTE["grey"])
 
-    # ---- footer ----
-    d.text((W // 2, 986),
-           "Sources: CNN  ·  Reuters  ·  The Times  ·  IANS  ·  BBC  —  Events of 20 November 2026, as reported that day",
-           font=font(FONT_REG, 16), fill=GREY, anchor="mm")
 
+def paint_footer(draw):
+    note = ("Sources: CNN  ·  Reuters  ·  The Times  ·  IANS  ·  BBC  —  "
+            "Events of 20 November 2026, as reported that day")
+    draw.text((W // 2, 986), note, font=load(16),
+              fill=PALETTE["grey"], anchor="mm")
+
+
+def build():
+    img = Image.new("RGB", (W, H), PALETTE["paper"])
+    draw = ImageDraw.Draw(img)
+    paint_header(draw)
+    card_w = (W - 2 * 28 - 18) // 2
+    card_h = (962 - 196 - 2 * 18) // 3
+    for i, story in enumerate(STORIES):
+        paint_story(draw, story, i, card_w, card_h)
+    paint_footer(draw)
     img.save("entry.png", format="PNG", optimize=True)
+    # The gate caps the entry at 1 MiB and 1024x1024: fail loudly here
+    # rather than shipping an entry the gate would reject.
+    assert img.size == (W, H)
+    assert getsize("entry.png") <= 1048576
 
 
 if __name__ == "__main__":
-    main()
+    build()
